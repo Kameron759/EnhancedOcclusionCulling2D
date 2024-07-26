@@ -117,7 +117,7 @@ public class EnhancedOcclusionCulling2D : MonoBehaviour
 
                         // Solved
                         //if(reference.objectsSettings[i].theGameObject.transform.childCount > 0){
-                        //    Debug.Log("WARNING! : Parent Game Object Detected, The Game Object" + " \"" + reference.objectsSettings[i].theGameObject.name + "\" " + "Is A Parent, Make Sure It's Occlusion Size Fits All Of Its Children!");
+                        //    Debug.Log("WARNING! : Parent Game Object Detected, The Game Object" + " \"" + reference.objectsSettings[i].theGameObject.name + "\" " + "Is A Parent, Make Sure Its Occlusion Size Fits All Of Its Children!");
                         //}
                         
                         if(i == reference.objectsSettings.Length - 1)
