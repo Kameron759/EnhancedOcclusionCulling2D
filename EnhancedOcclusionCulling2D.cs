@@ -37,7 +37,7 @@ public class EnhancedOcclusionCulling2D : MonoBehaviour
 
     private float timer;
 
-    private Camera camera;
+    private new Camera camera;
 
     [SerializeField, HideInInspector] private bool isInitialized;
     private bool hasSavedOverridingSettings = true;
