@@ -1,0 +1,255 @@
+using UnityEngine;
+using System.Collections.Generic;
+
+public class RopeController2D : MonoBehaviour {
+
+    private enum OnRopeAnglePointType { lerpPointAngleOnPercentage, lerpToTheClosestPointAngle, lerpToTheSecondClosestPointAngle }
+    private enum Angle2D { x, z }
+
+    [SerializeField] private float addedBoxCastSizeY = 0f;
+    [SerializeField] private float rayLength = 0.75f;
+    [SerializeField] private LayerMask ropeLayer;
+    [SerializeField] private float reClimbTime = 1f;
+    [SerializeField] private bool canClimbRopeWhileSwinging = true;
+    [SerializeField] private float climbSpeed = 0.1f;
+    [SerializeField] private float swayForce = 10;
+    [SerializeField] private Vector2 onRopeLinearOffset = new Vector2(-1.26f, -2.27f);
+    [SerializeField] Transform pointAlongPath;
+    [SerializeField] private OnRopeAnglePointType onRopeAnglePointType;
+    [SerializeField] private Angle2D onRopeAngle2D;
+    public bool ifCanClimbWhilSwngnAllowAnimSway;
+    [SerializeField] private bool hideVisualization = true;
+
+
+    private Controller2D controller2D;
+    private Old2PlayerAnimatorController playerAnimatorController;
+
+    private float sizeY;
+
+    private Timer timeToReJump;
+    private Timer timeToReclimbRope;
+    private Timer timeToRepushRopeAterPlayerHorizontalCollision = new Timer(0.5f);
+
+    private GameObject segment;
+    private GameObject previousRope;
+    private List<Transform> ropeSegments = new List<Transform>();
+    private Rigidbody2D segmentRigidBody2D;
+
+    private float onRopeAnglePoint;
+    private int segmentIndex = 1;
+    private float percentageRanged01;
+    
+
+    void Awake(){
+        controller2D = GetComponent<Controller2D>();
+        playerAnimatorController = GetComponentInChildren<Old2PlayerAnimatorController>();
+        timeToReJump = new Timer(0.4f, 0.4f);
+        timeToReclimbRope = new Timer(reClimbTime, reClimbTime);
+    }
+
+    void Update() {
+
+        sizeY = (controller2D.sized.y / 1.5f) / 2;
+        int directionX = playerAnimatorController.isFacingRight ? 1 : -1;
+        //Vector2 boxOrigin = transform.TransformPoint(controller2D.offset + new Vector2(0, (controller2D.sized.y / 2f) + -addedBoxCastSizeY / 2));
+        Vector2 origin = transform.TransformPoint(controller2D.offset + new Vector2(0, (controller2D.sized.y / 2f) + -addedBoxCastSizeY / 2));
+        //RaycastHit2D hitDetected = Physics2D.BoxCast(boxOrigin, new Vector2(rayLength, sizeY + addedBoxCastSizeY), transform.eulerAngles.z, transform.right, 0f, ropeLayer);
+        RaycastHit2D hitDetected = Physics2D.Raycast(origin, transform.right * directionX, rayLength, ropeLayer);
+
+        //if(hitDetected){
+            if(!hideVisualization){
+                //Debug.DrawLine(boxOrigin, hitDetected.point, Color.yellow);
+                Debug.DrawRay(origin, transform.right * controller2D.directionX * rayLength, Color.yellow);
+            }
+        //}
+        
+        timeToReclimbRope.RunTimer();
+        timeToRepushRopeAterPlayerHorizontalCollision.RunTimer();
+
+        if(segment == null){
+            bool anotherRope = previousRope != null && hitDetected && hitDetected.collider.GetComponentsInParent<Transform>()[1].gameObject != previousRope;
+            if(hitDetected & !controller2D.isGrounded & !controller2D.isHoldingGun & (timeToReclimbRope.ReachedDestination() | anotherRope)){
+                segment = hitDetected.collider.gameObject;
+                onRopeAnglePoint = segment.transform.localEulerAngles.z;
+
+                Transform[] all = segment.GetComponentsInParent<Transform>()[1].GetComponentsInChildren<Transform>();
+                for(int i = 0; i < all.Length; i++){
+                    
+                    ropeSegments.Add(all[i]);
+
+                    if(ropeSegments[i].gameObject == segment)
+                        segmentIndex = i;
+                    
+                    percentageRanged01 = (float)segmentIndex / ropeSegments.Count;
+
+                    if(ropeSegments == null)
+                        continue;
+
+                    if(i == all.Length - 1)
+                        ropeSegments.Remove(all[0]); // because it is not a child Transform
+                }
+            }
+        }
+        else
+        {
+            controller2D.isOnRope = true;
+
+            bool canClimb = canClimbRopeWhileSwinging | (!controller2D.IsGoingRightOnRope & !controller2D.IsGoingLeftOnRope);
+            float ropeStartPercentage = 0.02f;
+            float ropeEndPercentage = 1f;
+
+            if(!playerAnimatorController.stopVelocityMovingUpOrDownOnRopeForAWhile){
+                if(canClimb)
+                    percentageRanged01 -= controller2D.inputY * (climbSpeed * Time.deltaTime);
+            }
+                
+            //percentageRanged01 = Mathf.Clamp01(percentageRanged01);
+            percentageRanged01 = Mathf.Clamp(percentageRanged01, ropeStartPercentage, ropeEndPercentage);
+
+            float percentage = (((float)ropeSegments.Count - 1) / ropeSegments.Count) * percentageRanged01;
+            for(int i = 0; i < ropeSegments.Count - 1; i++){
+                if(percentage >= (float)i / ropeSegments.Count){
+                    pointAlongPath.position = Vector2.Lerp(ropeSegments[i].position, ropeSegments[i + 1].position, (percentage - ((float)i / ropeSegments.Count)) * ropeSegments.Count);
+
+                    if(onRopeAnglePointType == OnRopeAnglePointType.lerpPointAngleOnPercentage)
+                        onRopeAnglePoint = Mathf.LerpAngle(ropeSegments[i].localEulerAngles.z, ropeSegments[i + 1].localEulerAngles.z, (percentage - ((float)i / ropeSegments.Count)) * ropeSegments.Count); // last used
+                }
+            }
+
+            controller2D.IsGoingUpOrDownOnRope = controller2D.inputY != 0 & percentageRanged01 > ropeStartPercentage & percentageRanged01 < ropeEndPercentage;
+
+            if(percentageRanged01 > ropeStartPercentage & percentageRanged01 < ropeEndPercentage){
+                if(controller2D.inputY > 0)
+                    controller2D.IsGoingUpOnRope = canClimb;
+                else if(controller2D.inputY < 0)
+                    controller2D.IsGoingDownOnRope = canClimb;
+                else
+                    controller2D.IsGoingUpOnRope = controller2D.IsGoingDownOnRope = false;
+            }
+            else {
+                controller2D.IsGoingUpOnRope = controller2D.IsGoingDownOnRope = false;
+                playerAnimatorController.CanMoveVelocityYOnRopeClimb();
+            }
+
+            segment = new FindClosestPointAmongPoints().GetTheClosestPoint(pointAlongPath, ropeSegments.ToArray()).gameObject;
+            segmentRigidBody2D = segment.GetComponent<Rigidbody2D>();
+            
+
+            // Fine (Rotate To The Current Angle By Small Amount While Moving Up or Down) :
+            if(onRopeAnglePointType == OnRopeAnglePointType.lerpToTheClosestPointAngle){
+                float rotateBy = !controller2D.IsGoingUpOrDownOnRope ? 5.5f : 1.5f; // on 60fps values require adjustment
+                onRopeAnglePoint = Mathf.LerpAngle(onRopeAnglePoint, segment.transform.localEulerAngles.z, Time.deltaTime * rotateBy);
+            }
+            if(onRopeAnglePointType == OnRopeAnglePointType.lerpToTheSecondClosestPointAngle){
+                float rotateBy = !controller2D.IsGoingUpOrDownOnRope ? 5.5f : 1.5f; // on 60fps values require adjustment
+                Transform secondClosestPoint = new FindClosestPointUponIndex().GetTheClosestPointAtIndex(pointAlongPath, ropeSegments.ToArray(), 1);
+                onRopeAnglePoint = Mathf.LerpAngle(onRopeAnglePoint, secondClosestPoint.localEulerAngles.z, Time.deltaTime * rotateBy);
+            }
+
+            pointAlongPath.localEulerAngles = new Vector3(0, 0, onRopeAnglePoint);
+
+            transform.position = pointAlongPath.TransformPoint(new Vector2(onRopeLinearOffset.x * controller2D.directionX, onRopeLinearOffset.y));
+            if(onRopeAngle2D == default)
+                transform.eulerAngles = new Vector3(transform.eulerAngles.x, transform.eulerAngles.y, pointAlongPath.localEulerAngles.z);
+            else
+                transform.eulerAngles = new Vector3(pointAlongPath.localEulerAngles.z * -controller2D.directionX, transform.eulerAngles.y, transform.eulerAngles.z);
+
+            if(segmentRigidBody2D == null)
+                segmentRigidBody2D = segment.GetComponent<Rigidbody2D>();
+
+            /*if(_colRight){
+                timeToRepushRopeAterPlayerHorizontalCollision.RepeatTimer();
+   
+                if(segmentRigidBody2D.velocity.x > 0 & !_colUp)
+                    segmentRigidBody2D.velocity = Vector2.zero;
+                
+                if(controller2D.directionX > 0)
+                    onRopeBounceDirection = -1;
+                else
+                    onRopeBounceDirection = -3; // Because RigidBody2D.AddForce backward gets lower value than forward
+            }
+            if(_colLeft){
+                timeToRepushRopeAterPlayerHorizontalCollision.RepeatTimer();
+
+                if(segmentRigidBody2D.velocity.x < 0 & !_colUp)
+                    segmentRigidBody2D.velocity = Vector2.zero;
+
+                if(controller2D.directionX > 0)
+                    onRopeBounceDirection = 3; // Because RigidBody2D.AddForce backward gets lower value than forward
+                else
+                    onRopeBounceDirection = 1;
+            }
+            if(_colUp){
+                timeToRepushRopeAterPlayerHorizontalCollision.RepeatTimer();
+                if(segmentRigidBody2D.velocity.y > 0)
+                    segmentRigidBody2D.velocity = Vector2.zero;
+            }
+
+            if(timeToRepushRopeAterPlayerHorizontalCollision.ReachedDestination()){
+                onRopeBounceDamp = 500;
+            }
+            if(!timeToRepushRopeAterPlayerHorizontalCollision.ReachedDestination() | _colLeft | _colRight){
+                if(!_colUp){
+                    onRopeBounceDamp = Mathf.Lerp(onRopeBounceDamp, 0, Time.deltaTime);
+                    segmentRigidBody2D.AddForce(new Vector2(onRopeBounceDirection, 0) * onRopeBounceDamp);
+                }
+            }
+            if(!timeToRepushRopeAterPlayerHorizontalCollision.ReachedDestination() | _colUp){
+                onRopeBounceDamp = Mathf.Lerp(onRopeBounceDamp, 0, Time.deltaTime);
+                segmentRigidBody2D.AddForce(new Vector2(0, -1) * onRopeBounceDamp);
+            }*/
+            if(controller2D.inputX > 0){
+                //if(!_colRight & !_colLeft & timeToRepushRopeAterPlayerHorizontalCollision.ReachedDestination())
+                if(!controller2D.IsGoingUpOrDownOnRope)
+                    segmentRigidBody2D.AddForce(new Vector2(1, 0) * (swayForce / 0.01f));
+                
+                if(controller2D.directionX > 0){
+                    controller2D.IsGoingRightOnRope = true;
+                    controller2D.IsGoingLeftOnRope = false;
+                }
+                else {
+                    controller2D.IsGoingLeftOnRope = true;
+                    controller2D.IsGoingRightOnRope = false;
+                }
+            }
+            else if(controller2D.inputX < 0){
+                //if(!_colRight & !_colLeft & timeToRepushRopeAterPlayerHorizontalCollision.ReachedDestination())
+                if(!controller2D.IsGoingUpOrDownOnRope)
+                    segmentRigidBody2D.AddForce(new Vector2(-1, 0) * (swayForce / 0.01f));
+
+                if(controller2D.directionX > 0){
+                    controller2D.IsGoingLeftOnRope = true;
+                    controller2D.IsGoingRightOnRope = false;
+                }
+                else {
+                    controller2D.IsGoingRightOnRope = true;
+                    controller2D.IsGoingLeftOnRope = false;
+                }
+            }
+            else {
+                controller2D.IsGoingRightOnRope = false;
+                controller2D.IsGoingLeftOnRope = false;
+            }
+
+            if(Input.GetKeyDown(KeyCode.Space)){// | controller2D.isGrounded){
+                controller2D.ropeJump = true;
+                previousRope = segment.GetComponentsInParent<Transform>()[1].gameObject;
+                controller2D.IsGoingRightOnRope = controller2D.IsGoingLeftOnRope = controller2D.IsGoingUpOrDownOnRope = controller2D.isOnRope = false;
+
+                controller2D.IsGoingUpOnRope = controller2D.IsGoingDownOnRope = false;
+
+                segmentRigidBody2D = null;
+                timeToReclimbRope.RepeatTimer();
+                ropeSegments.Clear();
+                segment = null;
+            }
+
+        }
+    }
+
+    /*void OnDrawGizmosSelected(){
+        if(Application.isPlaying & !hideVisualization){
+            DrawGizmosBodies2D.DrawBoxWithAngle(transform.TransformPoint(controller2D.offset + new Vector2(0f, (controller2D.sized.y / 2f) + -addedBoxCastSizeY / 2)), rayLength, sizeY + addedBoxCastSizeY, transform.eulerAngles.z * Mathf.Deg2Rad, Color.green);
+        }
+    }*/
+}
