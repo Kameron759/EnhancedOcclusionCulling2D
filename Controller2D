@@ -1,0 +1,413 @@
+using UnityEngine;
+using UnityEngine.UI;
+
+public class Controller2D : RaysOrigins, ITakeDamage
+{
+    /*[SerializeField]*/ public Vector2 size = new Vector2(0.5f, 1f), offset;
+    [SerializeField] private float startEndRadius = 0.1f, addedCheckDistance = 0.14f;
+    [SerializeField, Range(1f, 1894f/*1614f*/)] private int health = 250; // max range is Screen.currentResolution.width - (healthSliderPosXandSizeXOffset * 2)
+
+    #region DrawCapsule2D
+    private Color color;
+
+    void OnDrawGizmosSelected(){
+        if(!hideVisualization){
+            color = isGrounded ? Color.white : Color.black;
+            Vector2 sized = new Vector2(size.x * Mathf.Abs(transform.localScale.x), size.y * Mathf.Abs(transform.localScale.y));
+            DrawGizmosBodies2D.DrawCapsuleAsUnityCapsule2D(transform.TransformPoint(offset), sized.y + addedCheckDistance, sized.x + addedCheckDistance, transform.eulerAngles.z * Mathf.Deg2Rad, color, true, startEndRadius);
+        }
+    }
+    #endregion
+
+    public bool isGrounded { get; set; }
+
+    [SerializeField] private float movementSpeed = 5f, movementSpeedInAirBonus = 2.5f, accelerationOnGround = 0.1f, accelerationInAir = 0.9f,
+    directingXSpeedOnGround = 10f, directingXSpeedInAir = 2.5f, jumpHeight = 4f, timeToJumpApex = 1.5f, skinWidth = 0.03f,/*0.4f;0.012f, maxClimbableAngle = 80;*/ raysOriginsOffset = 0.04f;
+    
+    public float maxClimbableAngle = 35f;
+
+    public LayerMask groundLayer = 1 << 6;
+    [SerializeField] private int totalVerticalRays = 25;
+    [SerializeField] private int totalHorizontalRays = 200;
+    [SerializeField] private bool alignCapsuleWithGround = true;
+    [SerializeField] private bool hideVisualization = false;
+
+    private float gravity, jumpVelocity;
+
+    private float fullLength;
+
+    private float deltaY, accelerationTime, velocityXSmoothing;
+    private Vector2 velocity;
+
+    public Vector2 sized { get; private set; }
+    public Vector2 start { get; private set; }
+    public Vector2 end { get; private set; }
+    private Vector2[] startAndEndPos;
+
+    private float directionY;//, directionX = 1;
+
+    public float directionX { get; private set; }
+
+    private float targetVelocityX;
+
+    private float inputDirecting;
+
+    public CapsuleCollider2D capsule2D { get; private set; }
+
+    private bool isColldingWithObstacleWhileOnSlope;
+
+    private float storedSlopeAngle;
+    private float storedSlopeDirection;
+
+    public bool isOnSlope { get; private set; }
+
+    private bool isCollidingAbove;
+    //private bool isCollidingHorizontally, isCollidingAbove;
+
+    private bool isClimbingSlope;
+
+    private bool isOnFlatSurface;
+
+    private bool isSlidingDownSlope;
+
+    public float inputX { get; private set; }
+    public float inputY { get; private set; }
+    public Vector2 Velocity { get; private set; }
+    private Vector3 _lastPosition;
+
+    public Old2PlayerAnimatorController playerAnimatorController { get; private set; }
+
+    public Vector2 middle { get { return transform.TransformPoint(offset); } }
+    //public float angleInRad { get { return transform.eulerAngles.z * Mathf.Deg2Rad; } }
+
+    public Vector2 topRight => transform.TransformPoint(offset + sized / 2);
+    public Vector2 topLeft => transform.TransformPoint(offset + new Vector2(-sized.x / 2, sized.y / 2));
+
+    public bool isOnLedge { get; set; }
+    public bool isOnRope { get; set; }
+    public bool IsGoingRightOnRope { get; set; }
+    public bool IsGoingLeftOnRope { get; set; }
+    public bool IsGoingUpOrDownOnRope { get; set; }
+    public bool IsGoingUpOnRope { get; set; }
+    public bool IsGoingDownOnRope { get; set; }
+    public bool OnRopeReachedTopOrBottom { get; set; }
+    public bool ropeJump { get; set; }
+    public bool isHoldingGun { get; set; }
+    public bool isDescendingDownLedge { get; set; }
+
+    public LedgeController2D ledgeController2D { get; private set; }
+
+    //private GameObject currentHitObject, oldHitObject;
+
+    private int currentHealth;
+
+    public bool isAlive { get; private set; }
+    public bool isDead { get; private set; }
+
+    public bool hasGottenDamaged { get; private set; }
+
+    [SerializeField] private Slider healthSlider;
+    private RectTransform healthRect;
+
+    private Camera mainCamera;
+
+    public float healthSliderPosXandSizeXOffset = 13f; //153f;
+
+    public bool hasJumped { get; private set; }
+
+    void Awake() { 
+        isAlive = true;
+        capsule2D = GetComponent<CapsuleCollider2D>();
+        playerAnimatorController = GetComponentInChildren<Old2PlayerAnimatorController>();
+        ledgeController2D = GetComponent<LedgeController2D>();
+        directionX = 1;
+        healthRect = healthSlider.GetComponent<RectTransform>();
+        mainCamera = Camera.main;
+        UpdateHealth();
+    }
+
+    void UpdateHealth(int addedOnMaxHealth = 0){ // sets max health and gets currentHealth at max health (should be called once)
+        health += addedOnMaxHealth;
+        currentHealth = health;
+        //healthRect.rect = new RectTransform(8.1335f + (health / 2), -50, health, 100); // it's read only
+        //healthRect.anchoredPosition = new Vector2(8.1335f + (health / 2), -50);
+        //healthRect.sizeDelta = new Vector2(health, 100);
+        //healthRect.anchoredPosition = new Vector2(mainCamera.pixelWidth / 2 + ((health / 2) - mainCamera.pixelWidth), -50);
+        //healthRect.sizeDelta = new Vector2(health - mainCamera.pixelWidth, 100);
+        //float resOffset = 0;
+        //Debug.Log(Screen.currentResolution.width); // gets the current resolution of the desktop
+        //float healthSliderPosXandSizeXOffset = 153f; // this is the problem when changing camera resolution
+        healthRect.anchoredPosition = new Vector2(healthSliderPosXandSizeXOffset + (health - Screen.currentResolution.width) / 2, -35);
+        healthRect.sizeDelta = new Vector2(healthSliderPosXandSizeXOffset * 2 + (-Screen.currentResolution.width + health), 100);
+    }
+
+    void Update(){
+        hasJumped = false;
+        hasGottenDamaged = false;
+        isAlive = currentHealth > 0;
+
+        Velocity = (transform.position - _lastPosition) / Time.deltaTime;
+        _lastPosition = transform.position;
+
+        float addVelocity = isClimbingSlope ? (Mathf.Abs(velocity.x) + Mathf.Abs(velocity.y)) * jumpHeight * movementSpeed : 0;
+        gravity = ((jumpHeight + addVelocity) * 2f) / Mathf.Pow((timeToJumpApex + addVelocity), 2); // (jumpHeight * 0.2f) for more than 60 fps
+        jumpVelocity = (Mathf.Abs(gravity) * (timeToJumpApex + addVelocity)) / 0.06f; // 0.06f for 60 fps, 0.006f for more than 60 fps
+        //print("(gravity : " + gravity + ") (jumpVelocity : " + jumpVelocity + ")");
+
+        sized = new Vector2(size.x * Mathf.Abs(transform.localScale.x), size.y * Mathf.Abs(transform.localScale.y));
+        //startAndEndPos = DrawGizmosBodies2D.GetCapsuleStartAndEndPositions(transform.TransformPoint(offset) + (velocity * 2), sized.y, sized.x, (transform.eulerAngles.z) * Mathf.Deg2Rad);
+        startAndEndPos = DrawGizmosBodies2D.GetCapsuleStartAndEndPositions(transform.TransformPoint(offset), sized.y, sized.x, (transform.eulerAngles.z) * Mathf.Deg2Rad);
+        start = startAndEndPos[0];
+        end = startAndEndPos[1];
+
+        fullLength = ((size.x - size.y > 0 ? size.x - size.y : 0) + size.y) / 2;
+        inputX = (isAlive ? Input.GetAxisRaw("Horizontal") : 0f);
+        inputY = (isAlive ? Input.GetAxisRaw("Vertical") : 0f);
+
+        if(!isOnLedge & !isOnRope)
+            Move(velocity);
+        else {
+            deltaY = 0;
+            if(isOnRope){
+                inputDirecting = inputX;
+                targetVelocityX = inputDirecting * (movementSpeed + movementSpeedInAirBonus) * Time.deltaTime;
+            } else {
+                inputDirecting = 0;
+                targetVelocityX = 0;
+            }
+            //isGrounded = isOnLedge;
+            directionY = -1;
+            VerticalCollision(ref velocity);
+            velocity = Vector2.zero;
+        }
+        //Debug.Log(targetVelocityX);
+        healthSlider.value = currentHealth / (float)health;
+    }
+
+    void Move(Vector2 velocity){
+        if(isGrounded)
+            deltaY = 0;
+        else
+            deltaY -= gravity;
+
+        if((Input.GetKeyDown(KeyCode.Space) & isGrounded & !isCollidingAbove & !isSlidingDownSlope & isAlive) | ropeJump){
+            hasJumped = true;
+            deltaY = jumpVelocity;
+            //if(playerAnimatorController)
+            //    playerAnimatorController._anim.SetTrigger(playerAnimatorController.JumpTriggerKey);
+            isGrounded = false;
+            ropeJump = false;
+        }
+
+        velocity.y = deltaY * Time.deltaTime;
+
+        float inAirSpeed = isGrounded ? 0 : movementSpeedInAirBonus;
+        float acceleration = isGrounded ? accelerationOnGround : accelerationInAir;
+
+        float directingXSpeed = isGrounded ? directingXSpeedOnGround : directingXSpeedInAir;
+        inputDirecting = Mathf.SmoothStep(inputDirecting, inputX, directingXSpeed * Time.deltaTime);
+
+        targetVelocityX = Mathf.SmoothStep(targetVelocityX, inputDirecting * (movementSpeed + inAirSpeed) * Time.deltaTime, acceleration);
+
+        velocity.x = targetVelocityX;
+
+        if(!isGrounded)
+            directionY = Mathf.Sign(velocity.y);
+        else
+            directionY = 1;
+        
+        if(velocity.x != 0)
+            directionX = Mathf.Sign(velocity.x);
+        
+        HandeSlope(ref velocity);
+        VerticalCollision(ref velocity);
+        HorizontalCollision(ref velocity);
+
+        transform.position += (Vector3)velocity;
+    }
+
+    void VerticalCollision(ref Vector2 velocity){
+
+        float rayLength = Mathf.Abs(velocity.y) + skinWidth;
+        RaycastHit2D currentHit = new RaycastHit2D();
+        int numberOfHits = 0;
+        for(int currentStep = 0; currentStep <= totalVerticalRays - 1; currentStep++){
+            float circumferenceProgress = (float)currentStep / (totalVerticalRays - 1);
+            float currentRadian = Mathf.PI * (circumferenceProgress * directionY);
+            float addAngle = transform.eulerAngles.z * Mathf.Deg2Rad;
+
+            float currentX = Mathf.Cos(currentRadian + addAngle) * (sized.x - raysOriginsOffset) / 2;
+            float currentY = Mathf.Sin(currentRadian + addAngle) * (sized.x - raysOriginsOffset) / 2;
+            Vector2 current = new Vector2(currentX, currentY);
+            Vector2 from = directionY < 0 ? end : start;
+
+            RaycastHit2D hit = Physics2D.Raycast(from + current, transform.up * directionY, rayLength, groundLayer);
+            if(!hideVisualization)
+                Debug.DrawRay(from + current, transform.up * directionY * rayLength);
+
+            if(directionY < 0){
+                isCollidingAbove = false;
+                if(hit){
+                    velocity.y = (hit.distance - skinWidth) * -1;
+                    rayLength = hit.distance;
+                    deltaY = 0;
+                    isGrounded = true;
+                }
+                continue;
+            }
+
+            if(hit)
+                numberOfHits++;
+
+            isCollidingAbove = numberOfHits > 0;
+
+            if(hit & (!isOnSlope | isClimbingSlope)){
+                velocity.y = (hit.distance - skinWidth) * directionY;
+                rayLength = hit.distance;
+                deltaY = 0;
+                if(isClimbingSlope){
+                    velocity.x = velocity.y / Mathf.Tan(storedSlopeAngle * Mathf.Deg2Rad) * Mathf.Sign(velocity.x);
+                }
+
+            }
+        }
+    }
+
+    void HandeSlope(ref Vector2 velocity){
+        
+        // stuttering while moving up slope is because the detection space is not enough (CapsuleCast distance check)
+        // only has the bottom half capsule length 
+        //RaycastHit2D CapsuleCastSlope = Physics2D.CapsuleCast(end, new Vector2(sized.x, sized.y / 2), CapsuleDirection2D.Vertical, transform.eulerAngles.z, -transform.up, addedCheckDistance + Mathf.Abs(velocity.x) + Mathf.Abs(velocity.y), groundLayer);
+        //RaycastHit2D CapsuleCastSlope = Physics2D.CapsuleCast(end, new Vector2(sized.x, sized.y / 2), CapsuleDirection2D.Vertical, transform.eulerAngles.z, -transform.up, addedCheckDistance + Mathf.Abs(velocity.x) + Mathf.Abs(velocity.y), groundLayer);
+        // fixed raycast that casts the the contact point normal from the end, but capsule cast cast from the contact point on the capsule, so if it goes in the ground, it detect the point normal from inside, which will result the normal to be inverted
+        //RaycastHit2D hitSlope = CapsuleCastSlope ? Physics2D.Raycast(end, (CapsuleCastSlope.point - end).normalized, Vector2.Distance(end, CapsuleCastSlope.point) + 0.01f, groundLayer) : new RaycastHit2D();
+
+        RaycastHit2D CapsuleCastSlope = Physics2D.CapsuleCast(middle, new Vector2(sized.x, sized.y), CapsuleDirection2D.Vertical, transform.eulerAngles.z, -transform.up, addedCheckDistance + Mathf.Abs(velocity.x) + Mathf.Abs(velocity.y), groundLayer);
+        RaycastHit2D hitSlope = CapsuleCastSlope ? Physics2D.Raycast(middle, (CapsuleCastSlope.point - middle).normalized, Vector2.Distance(middle, CapsuleCastSlope.point) + 0.01f, groundLayer) : new RaycastHit2D();
+        
+        /*if(hitSlope)
+            currentHitObject = hitSlope.collider.gameObject;
+
+        if(currentHitObject != oldHitObject)
+            isGrounded = false;
+
+        oldHitObject = currentHitObject;*/
+
+        if(hitSlope & !hideVisualization)
+            Debug.DrawLine(transform.TransformPoint(offset), hitSlope.point);
+
+        isOnFlatSurface = hitSlope.normal.x == 0;
+        isClimbingSlope = !isOnFlatSurface & Mathf.Sign(hitSlope.normal.x) != directionX;
+
+
+        float centerDot = Vector2.Dot(transform.TransformPoint(offset), Vector2.up);
+        float hitDot = Vector2.Dot(hitSlope.point, Vector2.up);
+
+        isOnSlope = isGrounded & hitSlope && hitDot < centerDot; 
+
+        //if(!hitSlope){
+        //    isGrounded = false;
+        //}
+
+        if(hitSlope && hitSlope.collider.tag == "Moving Platform"){
+            transform.parent = hitSlope.collider.transform;
+        } else {
+            transform.parent = null;
+        }
+
+        if(!isOnSlope){
+            isGrounded = false;
+            isSlidingDownSlope = false;
+            //targetVelocityX = 0;
+            //isGrounded = false;
+            if(alignCapsuleWithGround){
+                transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.Euler(transform.eulerAngles.x, transform.eulerAngles.y, 0f), Time.deltaTime);
+            }
+            return;
+        }
+        
+        ColliderDistance2D penetrationDepth = hitSlope ? Physics2D.Distance(capsule2D, hitSlope.collider) : new ColliderDistance2D();
+        float slopeAngle = Vector2.Angle(hitSlope.normal, Vector2.up);
+        storedSlopeAngle = slopeAngle;
+        storedSlopeDirection = Mathf.Sign(hitSlope.normal.x);
+        float penDepY = -penetrationDepth.distance * hitSlope.normal.y;
+        float penDepX = -penetrationDepth.distance * hitSlope.normal.x;
+        float moveDistance = Mathf.Abs(velocity.x);
+        float climbVelocityY = Mathf.Sin(slopeAngle * Mathf.Deg2Rad) * moveDistance;
+        if(alignCapsuleWithGround & slopeAngle <= maxClimbableAngle){
+            transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.Euler(transform.eulerAngles.x, transform.eulerAngles.y, slopeAngle * -Mathf.Sign(hitSlope.normal.x)), Time.deltaTime * 5f);
+        }
+
+        // sliding down unclimbable slope // stutering while above wall and detecting 90 or bigger on that wall so if (slopeAngle is less than 90 fixes the problem)
+        if(slopeAngle > maxClimbableAngle & slopeAngle < 90 /*| isCollidingHorizontally*/){ // colliding with obstacle while on slope
+            /*if(isClimbingSlope){
+                velocity.y = penDepY;
+                velocity.x = penDepX;
+            }*/
+            velocity.y = -(Mathf.Sin(slopeAngle * Mathf.Deg2Rad) * 0.1f) + penDepY;
+            velocity.x = (hitSlope.normal.x * Mathf.Abs(velocity.y) / Mathf.Tan(slopeAngle * Mathf.Deg2Rad)) + penDepX;
+            isSlidingDownSlope = true;
+            //velocity.y = -Mathf.Sin(slopeAngle * Mathf.Deg2Rad) * 0.125f + penDepY;
+            //velocity.x = (Mathf.Cos(slopeAngle * Mathf.Deg2Rad) * hitSlope.normal.x) + penDepX;// - (penDep / 2 * directionX);
+            return;
+        }
+        isSlidingDownSlope = false;
+        //Vector2 originLeft = transform.TransformPoint(new Vector2(offset.x - capsule2D.size.x / 2, offset.y));
+        //RaycastHit2D hitLeft = Physics2D.Raycast(originLeft, -transform.up, capsule2D.size.y / 2, groundLayer);
+        //Debug.DrawRay(originLeft, -transform.up * capsule2D.size.y / 2);
+        /*if(hitLeft && Vector2.Angle(hitLeft.normal, Vector2.up) > maxClimbableAngle & velocity.x < 0){ // gets called after sliding down left wall is finished 
+            velocity.y = penDepY;
+            velocity.x = -penetrationDepth.distance * hitLeft.normal.x;
+            return;
+        }*/
+        if(slopeAngle <= maxClimbableAngle & isGrounded){
+            if(Mathf.Sign(hitSlope.normal.x) != directionX){ // going up slope (1 normal.x with -1 directionX) or (-1 normal.x with 1 directionX)
+                velocity.y = climbVelocityY + penDepY;
+            }
+            else { // descening slope
+                velocity.y = -climbVelocityY + penDepY;
+            }
+            velocity.x = (Mathf.Cos(slopeAngle * Mathf.Deg2Rad) * moveDistance * directionX) + penDepX;// - (penDep / 2 * directionX);
+        }
+    }
+
+    void HorizontalCollision(ref Vector2 velocity){
+
+        float rayLength = Mathf.Abs(velocity.x) + skinWidth;
+
+        if (Mathf.Abs(velocity.x) < skinWidth) {
+			rayLength = 2*skinWidth;
+		}
+
+        Vector2[] origins = HorizontalRaysOrigins(start, end, sized, totalHorizontalRays, transform.eulerAngles.z * Mathf.Deg2Rad, directionX, raysOriginsOffset, rayLength);
+
+        //int numberOfHits = 0;
+        
+        //RaycastHit2D currentHit = new RaycastHit2D();
+        for(int i = 0; i < origins.Length; i++){
+            
+            RaycastHit2D hit = Physics2D.Raycast(origins[i], Vector2.right * directionX, rayLength, groundLayer);
+
+            if(!hideVisualization)
+                Debug.DrawRay(origins[i], Vector2.right * directionX * rayLength);
+
+            if(hit & !isSlidingDownSlope){
+
+                if(hit.distance > 0 & Vector2.Angle(hit.normal, Vector2.up) > maxClimbableAngle){
+                    
+                    //numberOfHits++;
+                    velocity.x = (hit.distance - skinWidth) * directionX;
+                    rayLength = hit.distance;
+                }
+            }
+            //isCollidingHorizontally = numberOfHits > 0;
+        }
+    }
+
+    public bool CanTakeDamage() { return isAlive; }
+    public void TakeDamage(int damageAmount){
+        currentHealth -= damageAmount;
+        //playerAnimatorController.OnDamageTaken();
+        hasGottenDamaged = true;
+    }
+}
